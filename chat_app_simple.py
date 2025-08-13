@@ -6,8 +6,8 @@ import uuid
 # =========================
 # 1. Cấu hình Supabase
 # =========================
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+SUPABASE_URL = "https://pdftmixflpeqbzatdjij.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBkZnRtaXhmbHBlcWJ6YXRkamlqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI4MDEwNDksImV4cCI6MjA2ODM3NzA0OX0.qR3HNj12dyb6dELGnoUe5je2KgkOqRHQrjne4f-AScQ"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 TABLE_NAME = "n8n_chat_histories"
