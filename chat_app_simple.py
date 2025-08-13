@@ -1,75 +1,90 @@
-import json
 import streamlit as st
-from typing import List, Dict
+from supabase import create_client, Client
+from datetime import datetime
+import uuid
 
-def parse_row_to_message(row: Dict):
-    # trả về dict chuẩn: {"role":..., "content":..., "image_url":..., "created_at":...}
-    content = row.get("content") or ""
-    role = row.get("role")
-    image_url = row.get("image_url") or row.get("url") or None
-    created_at = row.get("created_at") or row.get("createdAt") or None
+# =========================
+# 1. Cấu hình Supabase
+# =========================
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-    # Nếu chưa có content/role, thử lấy từ cột message (jsonb)
-    m_field = row.get("message")
-    if (not content or not role) and m_field:
-        try:
-            m_json = m_field if isinstance(m_field, dict) else json.loads(m_field)
-        except Exception:
-            m_json = {}
-        if not content:
-            content = m_json.get("content") or m_json.get("text") or content
-        if not role:
-            typ = (m_json.get("type") or m_json.get("role") or "").lower()
-            if typ in ("human", "user"):
-                role = "user"
-            elif typ in ("ai", "assistant", "bot"):
-                role = "assistant"
+TABLE_NAME = "n8n_chat_histories"
 
-    # fallback
-    if not role:
-        role = "user" if "human" in (row.get("source") or "").lower() else "assistant" if "ai" in (row.get("source") or "").lower() else "user"
+# =========================
+# 2. Lấy user_id
+# =========================
+def get_current_user_id():
+    session = st.session_state.get("supabase_session")
+    if session and "user" in session:
+        return session["user"]["id"]
+    return None
 
-    return {"role": role, "content": content, "image_url": image_url, "created_at": created_at}
+# =========================
+# 3. Tạo session_id
+# =========================
+def get_or_create_session_id():
+    if "session_id" not in st.session_state:
+        st.session_state["session_id"] = str(uuid.uuid4())
+    return st.session_state["session_id"]
 
-def load_messages_for_session(session_id: str) -> List[Dict]:
-    # cố gắng query có order bằng created_at (desc=False)
-    try:
-        resp = supabase.table("n8n_chat_histories") \
-            .select("*") \
-            .eq("session_id", session_id) \
-            .order("created_at", desc=False) \
-            .execute()
-    except TypeError as e:
-        # nếu thư viện không chấp nhận desc param, thử without order
-        st.warning("Warning: .order(..., desc=...) raised TypeError, retrying without order. Error: " + str(e))
-        resp = supabase.table("n8n_chat_histories") \
-            .select("*") \
-            .eq("session_id", session_id) \
-            .execute()
-    except Exception as e:
-        st.error("Lỗi khi gọi Supabase: " + str(e))
-        return []
+# =========================
+# 4. Lưu tin nhắn
+# =========================
+def save_message(user_id: str, session_id: str, role: str, content: str):
+    data = {
+        "user_id": user_id,
+        "session_id": session_id,
+        "role": role,
+        "content": content,
+        "created_at": datetime.utcnow().isoformat()
+    }
+    supabase.table(TABLE_NAME).insert(data).execute()
 
-    # Debug helper: hiển thị resp nếu cần (bỏ comment khi đã ổn)
-    # st.write("DEBUG - supabase response:", resp)
+# =========================
+# 5. Lấy lịch sử tin nhắn
+# =========================
+def load_chat_history(user_id: str, session_id: str):
+    response = supabase.table(TABLE_NAME) \
+        .select("*") \
+        .eq("user_id", user_id) \
+        .eq("session_id", session_id) \
+        .order("created_at") \
+        .execute()
+    return response.data if response.data else []
 
-    # Kiểm tra lỗi từ supabase client
-    # resp có thể có resp.error hoặc resp.status_code tuỳ version
-    if getattr(resp, "error", None):
-        st.error(f"Supabase returned error: {resp.error}")
-        return []
-    # resp.data là list hoặc None
-    rows = resp.data or []
+# =========================
+# 6. UI Streamlit
+# =========================
+st.set_page_config(page_title="Chatbot có lưu lịch sử", layout="wide")
+st.title("💬 Chatbot có lưu lịch sử vào Supabase")
 
-    messages = []
-    for r in rows:
-        try:
-            msg = parse_row_to_message(r)
-            if msg["content"]:   # chỉ thêm nếu có nội dung
-                messages.append(msg)
-        except Exception as e:
-            # không để crash app nếu 1 row bị lỗi
-            st.write("Lỗi khi parse row:", e, r)
-            continue
+# --- Giả lập login ---
+if "supabase_session" not in st.session_state:
+    st.session_state["supabase_session"] = {
+        "user": {"id": "00000000-0000-0000-0000-000000000000"}  # test ID
+    }
 
-    return messages
+user_id = get_current_user_id()
+session_id = get_or_create_session_id()
+
+if not user_id:
+    st.warning("Bạn cần đăng nhập để chat.")
+else:
+    # Hiển thị lịch sử chat
+    chat_history = load_chat_history(user_id, session_id)
+    for msg in chat_history:
+        if msg["role"] == "user":
+            st.markdown(f"**🧑‍💻 Bạn:** {msg['content']}")
+        else:
+            st.markdown(f"**🤖 Bot:** {msg['content']}")
+
+    # Nhập tin nhắn
+    message = st.text_input("Nhập tin nhắn:")
+    role = st.selectbox("Vai trò", ["user", "assistant"])
+
+    if st.button("Gửi"):
+        if message.strip():
+            save_message(user_id, session_id, role, message)
+            st.experimental_rerun()
